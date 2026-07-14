@@ -12,34 +12,50 @@ class piece():
         self.can_promote = False
         self.moved = False
     
-    def __deepcopy__(self, memo):
-        cls = self.__class__
-        new = cls.__new__(cls)
-        memo[id(self)] = new
+    # check_is_king_in_moves checks whether the enemy king is within the piece's moves
+    # and stores the result in a boolean variable
+    def check_is_king_in_moves(self, op_king_pos):
+        if op_king_pos in self.moves:
+            self.is_king_in_moves = True
+        else:
+            self.is_king_in_moves = False
+    
+    def add_moves(self, moves_to_check, pos_to_avoid, pos_to_stop):
+        for pd in moves_to_check:
+            for move in pd:
+                if (0 <= move[0] < 8) and (0 <= move[1] < 8):
+                    if move not in pos_to_avoid:
+                        self.moves.add(move)
+                        if move in pos_to_stop:
+                            break
+                    elif move in pos_to_avoid:
+                        self.protected.add(move)
+                        break
 
-        for key, value in self.__dict__.items():
-            if key == "image":
-                setattr(new, key, value)      # reuse the same Surface
-            else:
-                setattr(new, key, copy.deepcopy(value, memo))
+    def snapshot(self):
+        # fields that make/unmake-move logic can mutate; subclasses extend this
+        immutable_fields = ("i", "j", "moved", "can_promote", "is_checked", "done_castling", "step_counter", "en_passant_turn_count", "en_passant_move", "is_king_in_moves")
+        mutable_fields = ("moves", "protected", "optional_moves")
+        return {f: getattr(self, f) for f in immutable_fields if hasattr(self, f)} | {f : getattr(self, f).copy() for f in mutable_fields if hasattr(self, f)}
 
-        return new
+    def restore(self, snap):
+        for f, v in snap.items():
+            setattr(self, f, v)
     
     # dummy function, useful to maintain readeability in the code
     def promote(self):
         pass
-    
-    def check_is_king_in_moves(self, board_piece, black_king_pos, white_king_pos):
-        if board_piece.color == 'white':
-            if black_king_pos in board_piece.moves:
-                board_piece.is_king_in_moves = True
-            else:
-                board_piece.is_king_in_moves = False
-        else:
-            if white_king_pos in board_piece.moves:
-                board_piece.is_king_in_moves = True
-            else:
-                board_piece.is_king_in_moves = False
+            
+    def get_valid_moves(self, moves, cur_game_state):
+        pos_white = cur_game_state.position_of_white_pieces
+        pos_black = cur_game_state.position_of_black_pieces
+        same_color_pieces = pos_white if (self.color == "white") else pos_black
+        valid_moves = set()
+        for direction in moves:
+            for move in direction:
+                if (move not in same_color_pieces) and (0 <= move[0] < 8) and (0 <= move[1] < 8):
+                    valid_moves.add(move)
+        return valid_moves
     
     # handle_move makes the move and stores the necessary data, while making
     # changes to important data structures (like the two sets containing the 
@@ -47,52 +63,78 @@ class piece():
     # bpc = board_pieces copy, scp = current piece,
     # pbp = positions of black pieces, pwp = position of white pieces
     
-    def handle_move(self, bpc, scp, pbp, pwp, move):
-        position_of_same_color_pieces = pbp if bpc[scp].color == 'black' else pwp
-        position_of_opposite_color_pieces = pbp if bpc[scp].color == 'white' else pwp
-        position_of_same_color_pieces.remove((bpc[scp].i, bpc[scp].j))
-        set_move(bpc[scp], *move, black_king_pos, white_king_pos, pbp, pwp, bpc)
+    def undo_move(self, scp, move, cur_game_state, undo_dict):
+        position_of_same_color_pieces = (cur_game_state.position_of_black_pieces if (self.color == 'black') else cur_game_state.position_of_white_pieces)
+        position_of_opposite_color_pieces = (cur_game_state.position_of_black_pieces if (self.color == 'white') else cur_game_state.position_of_white_pieces)
+        position_of_same_color_pieces.remove(scp)
+        
+        position_of_same_color_pieces.add(move)
+        
+        if undo_dict["captured"] is not None:
+            position_of_opposite_color_pieces.add(scp)
     
+    def handle_move(self, scp, move, cur_game_state):
+        position_of_same_color_pieces = (cur_game_state.position_of_black_pieces if (cur_game_state.board_pieces[scp].color == 'black') 
+                                         else cur_game_state.position_of_white_pieces)
+        position_of_opposite_color_pieces = (cur_game_state.position_of_black_pieces if (cur_game_state.board_pieces[scp].color == 'white') 
+                                             else cur_game_state.position_of_white_pieces)
+        position_of_same_color_pieces.remove((cur_game_state.board_pieces[scp].i, cur_game_state.board_pieces[scp].j))
+        set_move(cur_game_state.board_pieces[scp], *move)
         board_pieces_index = move
         
         if board_pieces_index in position_of_opposite_color_pieces:
             position_of_opposite_color_pieces.remove(board_pieces_index)
         position_of_same_color_pieces.add(move)
-        bpc[board_pieces_index] = bpc[scp]
-        del bpc[scp]
+        cur_game_state.board_pieces[board_pieces_index] = cur_game_state.board_pieces[scp]
+        del cur_game_state.board_pieces[scp]
     
-    def remove_reveal_king_moves(self, count, board_pieces, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces):
+    def change_move(self, scp, move, cur_game_state):
+        undo_dict = {
+            "from" : scp,
+            "to" : move,
+            "captured" : None
+        }
+        
+        position_of_same_color_pieces = (cur_game_state.position_of_black_pieces if (self.color == 'black') else cur_game_state.position_of_white_pieces)
+        position_of_opposite_color_pieces = (cur_game_state.position_of_black_pieces if (self.color == 'white') else cur_game_state.position_of_white_pieces)
+        position_of_same_color_pieces.remove(scp)
+        board_pieces_index = move
+        
+        if board_pieces_index in position_of_opposite_color_pieces:
+            undo_dict["captured"] = (board_pieces_index)
+            position_of_opposite_color_pieces.remove(board_pieces_index)
+        position_of_same_color_pieces.add(move)
+        
+        return undo_dict
+    
+    def remove_reveal_king_moves(self, count, cur_game_state):
         # the king's moves should not get altered , ONLY the rest of the pieces determine
         # whether a move reveals the king and thus should be deleted, as it is not valid
         if self.name == "king": return
         
         color = "black" if (count % 2 != 0) else "white"
         
-        board_pieces_c = copy.deepcopy(board_pieces)
         scp = self.i, self.j
-        
         remove_list = []
-
+        copied_state = (cur_game_state)
+        same_color_king = cur_game_state.white_king_pos if (color == "white") else cur_game_state.black_king_pos
+        
         for move in copy.copy(self.moves):
-            bpc = copy.deepcopy(board_pieces_c)        # bcp = board_pieces copy
-            pbp = copy.copy(position_of_black_pieces)
-            pwp = copy.copy(position_of_white_pieces)
-            same_colored_king = [key for key in bpc if (bpc[key].name == "king") and (bpc[key].color == color)][0]
-            same_colored_king = bpc[same_colored_king]
+            bpc = copied_state.board_pieces     # bcp = board_pieces copy
             
-            self.handle_move(bpc, scp, pbp, pwp, move)
+            undo_dict = self.change_move(scp, move, copied_state)
+            dif_color_pieces = cur_game_state.position_of_black_pieces if (self.color != "black") else cur_game_state.position_of_white_pieces
             
-            for board_piece in bpc:
-                bpc[board_piece].find_moves(black_king_pos, white_king_pos, pbp, pwp, bpc)
+            for board_piece in dif_color_pieces:
+                if bpc[board_piece].color == color: continue
+                attacks_king = bpc[board_piece].attacks_square(same_color_king, cur_game_state)
+                if attacks_king :
+                    remove_list.append((scp, move))
+                        
+            self.undo_move(move, scp, copied_state, undo_dict)
             
-                self.check_is_king_in_moves(bpc[board_piece], black_king_pos, white_king_pos)
-                if bpc[board_piece].is_king_in_moves and (bpc[board_piece].color != color):
-                    opposite_king_pos = black_king_pos if (bpc[board_piece].color == "white") else white_king_pos
-                    if move != opposite_king_pos:
-                        remove_list.append((scp, move))
-                
         for scp, move in remove_list:
-            board_pieces[scp].moves.discard(move)
+            cur_game_state.board_pieces[scp].moves.discard(move)
 
 class pawn(piece):
     def __init__(self, i, j, image, color, name, to_place_dict):            # i, j denote the position in the 2d list of blocks/rects
@@ -109,21 +151,18 @@ class pawn(piece):
         if (self.j == 0) or (self.j == 7):
             self.can_promote = True
     
-    def capture_en_passant(self, difx, dify, position_of_black_pieces, position_of_white_pieces, move, count):
-        pieces_to_check = position_of_black_pieces if (self.color == "black") else position_of_white_pieces
-        #print(difx, dify, move in pieces_to_check, count, self.en_passant_turn_count)
-        #return (difx == 1) and (dify == 1) and (move not in pieces_to_check) and (abs(count-self.en_passant_turn_count) == 1)
+    def capture_en_passant(self, difx, dify, cur_game_state, move, count):
         return (difx == 1) and (dify == 1) and (abs(count-self.en_passant_turn_count) == 1)
         
-    def handle_en_passant(self, position_of_black_pieces, position_of_white_pieces, board_pieces, move, dif_y, count):
+    def handle_en_passant(self, cur_game_state, move, dif_y, count):
         # a list of tuples: the first part of each tuple is the position of the pawn eligible to perform
         # the en passant move, the second is the position it will end up if the move is made and the last
-        # is the position of the pawn captured
+        # is the position of the captured pawn
         return_moves = []
         
         if dif_y == 2:
-            pieces_to_use = position_of_black_pieces if (self.color == "white") else position_of_white_pieces
-            pawns_to_check = {pos for pos in pieces_to_use if board_pieces[pos].name == "pawn"}
+            pieces_to_use = cur_game_state.position_of_black_pieces if (self.color == "white") else cur_game_state.position_of_white_pieces
+            pawns_to_check = {pos for pos in pieces_to_use if cur_game_state.board_pieces[pos].name == "pawn"}
             
             # if the current pawn moving two squares from its initial position is black, then
             # the y_offset for the opposite color pawns must be -1, because they are moving from
@@ -133,74 +172,79 @@ class pawn(piece):
             # enemy pawn. This function acts as a trigger for the neighbouring opposite pawn,
             # enabling them to perform the en passant move
             y_offset = -1 if (self.color == "black") else 1
+            # positions to check for possible en passant available pawns
+            pos_left = (move[0]-1, move[1])
+            pos_right = (move[0]+1, move[1])
             
-            if move[0] - 1 > 0:
-                if (move[0]-1, move[1]) in pawns_to_check:
-                    return_moves.append(((move[0]-1, move[1]), (move[0], move[1]+y_offset), (move)))
-            if move[0] + 1 < 8:
-                if (move[0]+1, move[1]) in pawns_to_check:
-                    return_moves.append(((move[0]+1, move[1]), (move[0], move[1]+y_offset), (move)))
-                    
-        #if (self.en_passant_turn_count == 0) and (len(return_moves) > 0):
-        #    self.en_passant_turn_count = count
+            if pos_left[0] > 0:
+                if pos_left in pawns_to_check:
+                    return_moves.append((pos_left, (move[0], move[1]+y_offset), (move)))
+            if pos_right[0] < 8:
+                if pos_right in pawns_to_check:
+                    return_moves.append((pos_right, (move[0], move[1]+y_offset), (move)))
                     
         return return_moves
+    
+    def attacks_square(self, square, cur_game_state):
+        possible_moves = [(-1, -1), (1, -1)] if (self.color != "black") else [(-1, 1), (1, 1)]
+        moves_to_check = [(self.i + move_x, self.j + move_y) for (move_x, move_y) in possible_moves]
+        valid_moves = self.get_valid_moves([moves_to_check], cur_game_state)
+        return square in valid_moves
 
-    def find_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces):
+    def find_moves(self, cur_game_state):
         self.moves.clear()
         self.protected.clear()
         self.important_moves.clear()
-        op_king_pos = black_king_pos if self.color == 'white' else white_king_pos
+        op_king_pos = cur_game_state.black_king_pos if (self.color == 'white') else cur_game_state.white_king_pos
 
         if self.color == 'black':
             if self.j + 1 <= 7:
-                if (self.i, self.j+1) not in position_of_white_pieces and ((self.i, self.j+1) not in position_of_black_pieces):
+                if (self.i, self.j+1) not in cur_game_state.position_of_white_pieces and ((self.i, self.j+1) not in cur_game_state.position_of_black_pieces):
                     self.moves.add((self.i, self.j+1))
-                    if self.j == 1 and ((self.i, self.j+2) not in position_of_white_pieces) and ((self.i, self.j+2) not in position_of_black_pieces):
+                    if ((self.j == 1) and ((self.i, self.j+2) not in cur_game_state.position_of_white_pieces) and 
+                        ((self.i, self.j+2) not in cur_game_state.position_of_black_pieces)):
                         self.moves.add((self.i, self.j+2))
                         self.optional_moves.add((self.i, self.j+2))
                 
-                if self.i + 1 <= 7 and (self.i+1, self.j+1) not in position_of_black_pieces:
-                    if (self.i+1, self.j+1) in position_of_white_pieces:
+                if (self.i + 1 <= 7) and ((self.i+1, self.j+1) not in cur_game_state.position_of_black_pieces):
+                    if (self.i+1, self.j+1) in cur_game_state.position_of_white_pieces:
                         self.moves.add((self.i+1, self.j+1))
                     self.important_moves.add((self.i+1, self.j+1))
                 
-                if self.i - 1 >= 0 and (self.i-1, self.j+1) not in position_of_black_pieces:
-                    if (self.i-1, self.j+1) in position_of_white_pieces:
+                if (self.i - 1 >= 0) and ((self.i-1, self.j+1) not in cur_game_state.position_of_black_pieces):
+                    if (self.i-1, self.j+1) in cur_game_state.position_of_white_pieces:
                         self.moves.add((self.i-1, self.j+1))
                     self.important_moves.add((self.i-1, self.j+1))
                
-            if self.i + 1 <= 7 and self.j+1 <= 7 and (self.i+1, self.j+1) in position_of_black_pieces:
+            if (self.i + 1 <= 7) and (self.j+1 <= 7) and ((self.i+1, self.j+1) in cur_game_state.position_of_black_pieces):
                     self.protected.add((self.i+1, self.j+1))
-            if self.i - 1 >= 0 and self.j+1 <= 7 and (self.i-1, self.j+1) in position_of_black_pieces:
+            if (self.i - 1 >= 0) and (self.j+1 <= 7) and ((self.i-1, self.j+1) in cur_game_state.position_of_black_pieces):
                     self.protected.add((self.i-1, self.j+1))
         elif self.color == 'white':
             if self.j - 1 >= 0:
-                if (self.i, self.j-1) not in position_of_black_pieces and ((self.i, self.j-1) not in position_of_white_pieces):
+                if ((self.i, self.j-1) not in cur_game_state.position_of_black_pieces) and ((self.i, self.j-1) not in cur_game_state.position_of_white_pieces):
                     self.moves.add((self.i, self.j-1))
-                    if self.j == 6 and ((self.i, self.j-2) not in position_of_black_pieces) and ((self.i, self.j-2) not in position_of_white_pieces):
+                    if ((self.j == 6) and ((self.i, self.j-2) not in cur_game_state.position_of_black_pieces) and 
+                        ((self.i, self.j-2) not in cur_game_state.position_of_white_pieces)):
                         self.moves.add((self.i, self.j-2))
                         self.optional_moves.add((self.i, self.j-2))
                 
-                if self.i + 1 <= 7 and (self.i+1, self.j-1) not in position_of_white_pieces:
-                    if (self.i+1, self.j-1) in position_of_black_pieces:
+                if (self.i + 1 <= 7) and ((self.i+1, self.j-1) not in cur_game_state.position_of_white_pieces):
+                    if (self.i+1, self.j-1) in cur_game_state.position_of_black_pieces:
                         self.moves.add((self.i+1, self.j-1))
                     self.important_moves.add((self.i+1, self.j-1))
                
-                if self.i - 1 >= 0 and (self.i-1, self.j-1) not in position_of_white_pieces:
-                    if (self.i-1, self.j-1) in position_of_black_pieces:
+                if (self.i - 1 >= 0) and ((self.i-1, self.j-1) not in cur_game_state.position_of_white_pieces):
+                    if (self.i-1, self.j-1) in cur_game_state.position_of_black_pieces:
                         self.moves.add((self.i-1, self.j-1))
                     self.important_moves.add((self.i-1, self.j-1))
                 
-            if self.i + 1 <= 7 and self.j-1 >= 0 and (self.i+1, self.j-1) in position_of_white_pieces:
+            if (self.i + 1 <= 7) and (self.j-1 >= 0) and ((self.i+1, self.j-1) in cur_game_state.position_of_white_pieces):
                     self.protected.add((self.i+1, self.j-1))
-            if self.i - 1 >= 0 and self.j-1 >= 0 and (self.i-1, self.j-1) in position_of_white_pieces:
+            if (self.i - 1 >= 0) and (self.j-1 >= 0) and ((self.i-1, self.j-1) in cur_game_state.position_of_white_pieces):
                     self.protected.add((self.i-1, self.j-1))
         
-        if op_king_pos in self.moves:
-            self.is_king_in_moves = True
-        else:
-            self.is_king_in_moves = False
+        self.check_is_king_in_moves(op_king_pos)
         #remove_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces)
 
 class king(piece):
@@ -236,7 +280,9 @@ class king(piece):
             }
         }
         
-    def change_rook_castling(self, board_pieces, position_of_black_pieces, position_of_white_pieces, move):   
+        self.directions = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]
+        
+    def change_rook_castling(self, cur_game_state, move):   
         
         # perform the castling move for the respective rook, only if the move (king move) is either 
         # the left or the right king castling move
@@ -244,14 +290,14 @@ class king(piece):
         castling = self.castling[self.color]
         
         if (move == castling["left_castling_pos"]) and (self.step_counter == 1):  # and (move in board_pieces) ensures the piece hasn't been captured yet
-            self.handle_move(board_pieces, castling['left_rook_pos'], position_of_black_pieces, position_of_white_pieces, castling["left_rook_castling_pos"])
+            self.handle_move(castling['left_rook_pos'], castling["left_rook_castling_pos"], cur_game_state)
         if (move == castling["right_castling_pos"]) and (self.step_counter == 1):
-            self.handle_move(board_pieces, castling['right_rook_pos'], position_of_black_pieces, position_of_white_pieces, castling["right_rook_castling_pos"])
+            self.handle_move(castling['right_rook_pos'], castling["right_rook_castling_pos"], cur_game_state)
 
-    def remove_invalid_castling_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces):
-        pos_to_avoid = position_of_black_pieces if self.color == 'black' else position_of_white_pieces
-        pos_to_stop = position_of_black_pieces if self.color == 'white' else position_of_white_pieces
-        non_available_moves = {board_pieces[i[0], i[1]] for i in pos_to_stop if board_pieces[i[0], i[1]].name != 'king'}
+    def remove_invalid_castling_moves(self, cur_game_state):
+        pos_to_avoid = cur_game_state.position_of_black_pieces if (self.color == 'black') else cur_game_state.position_of_white_pieces
+        pos_to_stop = cur_game_state.position_of_black_pieces if (self.color == 'white') else cur_game_state.position_of_white_pieces
+        non_available_moves = {cur_game_state.board_pieces[i[0], i[1]] for i in pos_to_stop if cur_game_state.board_pieces[i[0], i[1]].name != 'king'}
         
         if not self.moved:
             # get the castling dict according to the king's color
@@ -287,303 +333,97 @@ class king(piece):
             if (not right_castling_valid):
                 self.moves.discard(castling["right_castling_pos"])
 
-    def find_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces):
-        self.moves.clear()
-        self.protected.clear()
-        pos_to_avoid = position_of_black_pieces if self.color == 'black' else position_of_white_pieces
-        pos_to_stop = position_of_black_pieces if self.color == 'white' else position_of_white_pieces
-        non_available_moves = {board_pieces[i[0], i[1]] for i in pos_to_stop if board_pieces[i[0], i[1]].name != 'king'}
-        
+    def attacks_square(self, square, cur_game_state):
+        moves_to_check = [(self.i + move_x, self.j + move_y) for (move_x, move_y) in self.directions]
+        valid_moves = self.get_valid_moves([moves_to_check], cur_game_state)
+        return square in valid_moves
+
+    def handle_castling_move(self, cur_game_state):
          # handle castling
         if not self.moved:
             # get the castling dict according to the king's color
             castling = self.castling[self.color]
             
-            left_rook = board_pieces.get(castling["left_rook_pos"])
-            right_rook = board_pieces.get(castling["right_rook_pos"])
+            left_rook = cur_game_state.board_pieces.get(castling["left_rook_pos"])
+            right_rook = cur_game_state.board_pieces.get(castling["right_rook_pos"])
             # a list containig two individual lists that hold the positions we have to check
             # for the left and right castling respectively. A castling move is only valid if
             # the king doesn't leave, cross over or end up in a square attacked by enemy pieces.
             # Neither the king nor the respective rook must have moved and the squares between
             # them are empty
-            castling_pos = [castling["left_pos_to_check"], castling["right_pos_to_check"]]
             
             if (left_rook is not None) and (left_rook.name == "lrook") and (not left_rook.moved):
                 self.moves.add(castling["left_castling_pos"])
             if (right_rook is not None) and (right_rook.name == "rrook") and (not right_rook.moved):
                 self.moves.add(castling["right_castling_pos"])
             
-            self.remove_invalid_castling_moves(black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces)
+            self.remove_invalid_castling_moves(cur_game_state)
+
+    def find_moves(self, cur_game_state):
+        self.moves.clear()
+        self.protected.clear()
+        pos_to_avoid = cur_game_state.position_of_black_pieces if (self.color == 'black') else cur_game_state.position_of_white_pieces
+        pos_to_stop = cur_game_state.position_of_black_pieces if (self.color == 'white') else cur_game_state.position_of_white_pieces
+        non_available_moves = {cur_game_state.board_pieces[i[0], i[1]] for i in pos_to_stop}
         
-        if self.i + 1 <= 7 and ((self.i+1, self.j) not in pos_to_avoid):
-            for nam in non_available_moves:
-                moves = nam.moves if nam.name != 'pawn' else nam.important_moves
-                if (self.i+1, self.j) in moves:
-                    break
-            else:
-                self.moves.add((self.i+1, self.j))
-        elif self.i + 1 <= 7 and ((self.i+1, self.j) in pos_to_avoid):
-            self.protected.add((self.i+1, self.j))
-            
-        if self.j + 1 <= 7 and self.i + 1 <= 7 and ((self.i+1, self.j+1) not in pos_to_avoid):
-            for nam in non_available_moves:
-                moves = nam.moves if nam.name != 'pawn' else nam.important_moves
-                if (self.i+1, self.j+1) in moves:
-                    break
-            else:
-                self.moves.add((self.i+1, self.j+1))
-            
-        elif self.j + 1 <= 7 and self.i + 1 <= 7 and ((self.i+1, self.j+1) in pos_to_avoid):
-            self.protected.add((self.i+1, self.j+1))
-        if self.j - 1 >= 0 and self.i + 1 <= 7 and ((self.i+1, self.j-1) not in pos_to_avoid):
-            for nam in non_available_moves:
-                moves = nam.moves if nam.name != 'pawn' else nam.important_moves
-                if (self.i+1, self.j-1) in moves:
-                    break
-            else:
-                self.moves.add((self.i+1, self.j-1))
-                
-        elif self.j - 1 >= 0 and self.i + 1 <= 7 and ((self.i+1, self.j-1) in pos_to_avoid):
-            self.protected.add((self.i+1, self.j-1))
-        if self.i - 1 >= 0 and ((self.i-1, self.j) not in pos_to_avoid):
-            for nam in non_available_moves:
-                moves = nam.moves if nam.name != 'pawn' else nam.important_moves
-                if (self.i-1, self.j) in moves:
-                    break
-            else:
-                self.moves.add((self.i-1, self.j))
-            
-        elif self.i - 1 >= 0 and ((self.i-1, self.j) in pos_to_avoid):
-            self.protected.add((self.i-1, self.j))
-        if self.j + 1 <= 7 and self.i - 1 >= 0 and ((self.i-1, self.j+1) not in pos_to_avoid):
-            for nam in non_available_moves:
-                moves = nam.moves if nam.name != 'pawn' else nam.important_moves
-                if (self.i-1, self.j+1) in moves:
-                    break
-            else:
-                self.moves.add((self.i-1, self.j+1))
-                
-        elif self.j + 1 <= 7 and self.i - 1 >= 0 and ((self.i-1, self.j+1) in pos_to_avoid):
-            self.protected.add((self.i-1, self.j+1))
-        if self.j - 1 >= 0 and self.i - 1 >= 0 and ((self.i-1, self.j-1) not in pos_to_avoid):
-            for nam in non_available_moves:
-                moves = nam.moves if nam.name != 'pawn' else nam.important_moves
-                if (self.i-1, self.j-1) in moves:
-                    break
-            else:
-                self.moves.add((self.i-1, self.j-1))
-                
-        elif self.j - 1 >= 0 and self.i - 1 >= 0 and ((self.i-1, self.j-1) in pos_to_avoid):
-            self.protected.add((self.i-1, self.j-1))
-        if self.j + 1 <= 7 and ((self.i, self.j+1) not in pos_to_avoid):
-            for nam in non_available_moves:
-                moves = nam.moves if nam.name != 'pawn' else nam.important_moves
-                if (self.i, self.j+1) in moves:
-                    break
-            else:
-                self.moves.add((self.i, self.j+1))
-           
-        elif self.j + 1 <= 7 and ((self.i, self.j+1) in pos_to_avoid):
-            self.protected.add((self.i, self.j+1))
-        if self.j - 1 >= 0 and ((self.i, self.j-1) not in pos_to_avoid):
-            for nam in non_available_moves:
-                moves = nam.moves if nam.name != 'pawn' else nam.important_moves
-                if (self.i, self.j-1) in moves:
-                    break
-            else:
-                self.moves.add((self.i, self.j-1))
-           
-        elif self.j - 1 >= 0 and ((self.i, self.j-1) in pos_to_avoid):
-            self.protected.add((self.i, self.j-1))
-
-
-    def update_moves(self, position_of_black_pieces, position_of_white_pieces, board_pieces):
-        pos_to_stop = position_of_black_pieces if self.color == 'white' else position_of_white_pieces
-        opposite_color_pieces = {board_pieces[i[0], i[1]] for i in pos_to_stop}
-       
-        self.remove_invalid_castling_moves(black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces)
-       
-        for opposite_color_piece in opposite_color_pieces:
-            if opposite_color_piece.name == 'queen' and opposite_color_piece.is_king_in_moves and self.is_checked:
-                if self.i == opposite_color_piece.i:
-                    if self.is_checked and (self.i, self.j-1) in self.moves and (self.i, self.j-1) != (opposite_color_piece.i, opposite_color_piece.j):
-                        self.moves.remove((self.i, self.j-1))
-                    if self.is_checked and (self.i, self.j+1) in self.moves and (self.i, self.j+1) != (opposite_color_piece.i, opposite_color_piece.j):
-                        self.moves.remove((self.i, self.j+1))
-                if self.j == opposite_color_piece.j and opposite_color_piece.is_king_in_moves:
-                    if self.is_checked and (self.i-1, self.j) in self.moves and (self.i-1, self.j) != (opposite_color_piece.i, opposite_color_piece.j):
-                        self.moves.remove((self.i-1, self.j))
-                    if self.is_checked and (self.i+1, self.j) in self.moves and (self.i+1, self.j) != (opposite_color_piece.i, opposite_color_piece.j):
-                        self.moves.remove((self.i+1, self.j))
-
-                man_dist = manhattam_distance((self.i, self.j), (opposite_color_piece.i, opposite_color_piece.j))//2
-
-                if (man_dist == abs(self.i-opposite_color_piece.i)) and (man_dist == abs(self.j-opposite_color_piece.j)):
-                    man_dist1 = manhattam_distance((self.i-1, self.j-1), (opposite_color_piece.i, opposite_color_piece.j))//2
-                    man_dist2 = manhattam_distance((self.i-1, self.j+1), (opposite_color_piece.i, opposite_color_piece.j))//2
-                    man_dist3 = manhattam_distance((self.i+1, self.j-1), (opposite_color_piece.i, opposite_color_piece.j))//2
-                    man_dist4 = manhattam_distance((self.i+1, self.j+1), (opposite_color_piece.i, opposite_color_piece.j))//2
-                    if (self.i-1, self.j-1) in self.moves and (man_dist1 == abs(self.i-1-opposite_color_piece.i)) and (man_dist1 == abs(self.j-1-opposite_color_piece.j)):
-                        self.moves.remove((self.i-1, self.j-1))
-                    if (self.i-1, self.j+1) in self.moves and (man_dist2 == abs(self.i-1-opposite_color_piece.i)) and (man_dist2 == abs(self.j+1-opposite_color_piece.j)):
-                        self.moves.remove((self.i-1, self.j+1))
-                    if (self.i+1, self.j-1) in self.moves and (man_dist3 == abs(self.i+1-opposite_color_piece.i)) and (man_dist3 == abs(self.j-1-opposite_color_piece.j)):
-                        self.moves.remove((self.i+1, self.j-1))
-                    if (self.i+1, self.j+1) in self.moves and (man_dist4 == abs(self.i+1-opposite_color_piece.i)) and (man_dist4 == abs(self.j+1-opposite_color_piece.j)):
-                        self.moves.remove((self.i+1, self.j+1))
-                    if (man_dist == 1):
-                        self.moves.add((opposite_color_piece.i, opposite_color_piece.j))
-                
-                if self.is_checked and (manhattam_distance((self.i, self.j), (opposite_color_piece.i, opposite_color_piece.j))//2 == 0):
-                    if (self.i-1, self.j-1) in self.moves and ((self.i-1)==opposite_color_piece.i or (self.j-1)==opposite_color_piece.j):
-                        self.moves.remove((self.i-1, self.j-1))
-                    if (self.i-1, self.j+1) in self.moves and ((self.i-1)==opposite_color_piece.i or (self.j+1)==opposite_color_piece.j):
-                        self.moves.remove((self.i-1, self.j+1))
-                    if (self.i+1, self.j-1) in self.moves and ((self.i+1)==opposite_color_piece.i or (self.j-1)==opposite_color_piece.j):
-                        self.moves.remove((self.i+1, self.j-1))
-                    if (self.i+1, self.j+1) in self.moves and ((self.i+1)==opposite_color_piece.i or (self.j+1)==opposite_color_piece.j):
-                        self.moves.remove((self.i+1, self.j+1))
-                
-            elif (opposite_color_piece.name == 'rbishop' or opposite_color_piece.name == 'lbishop') and opposite_color_piece.is_king_in_moves and self.is_checked:
-                man_dist = manhattam_distance((self.i, self.j), (opposite_color_piece.i, opposite_color_piece.j))//2
-                if (man_dist == abs(self.i-opposite_color_piece.i)) and (man_dist == abs(self.j-opposite_color_piece.j)) and self.is_checked:
-                    man_dist1 = manhattam_distance((self.i-1, self.j-1), (opposite_color_piece.i, opposite_color_piece.j))//2
-                    man_dist2 = manhattam_distance((self.i-1, self.j+1), (opposite_color_piece.i, opposite_color_piece.j))//2
-                    man_dist3 = manhattam_distance((self.i+1, self.j-1), (opposite_color_piece.i, opposite_color_piece.j))//2
-                    man_dist4 = manhattam_distance((self.i+1, self.j+1), (opposite_color_piece.i, opposite_color_piece.j))//2
-                    if (self.i-1, self.j-1) in self.moves and (man_dist1 == abs(self.i-1-opposite_color_piece.i)) and (man_dist1 == abs(self.j-1-opposite_color_piece.j)):
-                        self.moves.remove((self.i-1, self.j-1))
-                    if (self.i-1, self.j+1) in self.moves and (man_dist2 == abs(self.i-1-opposite_color_piece.i)) and (man_dist2 == abs(self.j+1-opposite_color_piece.j)):
-                        self.moves.remove((self.i-1, self.j+1))
-                    if (self.i+1, self.j-1) in self.moves and (man_dist3 == abs(self.i+1-opposite_color_piece.i)) and (man_dist3 == abs(self.j-1-opposite_color_piece.j)):
-                        self.moves.remove((self.i+1, self.j-1))
-                    if (self.i+1, self.j+1) in self.moves and (man_dist4 == abs(self.i+1-opposite_color_piece.i)) and (man_dist4 == abs(self.j+1-opposite_color_piece.j)):
-                        self.moves.remove((self.i+1, self.j+1))
-                if (man_dist <= 1):
-                    self.moves.add((opposite_color_piece.i, opposite_color_piece.j))
-                
-            elif opposite_color_piece.name == 'rrook' or opposite_color_piece.name == 'lrook':
-                if self.is_checked and opposite_color_piece.is_king_in_moves:
-                    directions = [(-1, -1), (0, -1), (1, -1), (1, 0), (-1, 0), (-1, 1), (0, 1), (1, 1)]
-                    man_dist = manhattam_distance((opposite_color_piece.i, opposite_color_piece.j), (self.i, self.j))
-                    for direction in directions:
-                        move = (direction[0] + self.i, direction[1] + self.j)
-                        if self.is_checked and (move[0] == opposite_color_piece.i or move[1] == opposite_color_piece.j):
-                            if move in self.moves:
-                                if move == (opposite_color_piece.i, opposite_color_piece.j) and man_dist == 1:
-                                    continue
-                                self.moves.remove(move)
-
-            elif opposite_color_piece.name == 'king':
-                directions = [(-1, -1), (0, -1), (1, -1), (1, 0), (-1, 0), (-1, 1), (0, 1), (1, 1)]
-                for direction in directions:
-                    man_dist = manhattam_distance((opposite_color_piece.i, opposite_color_piece.j), (self.i+direction[0], self.j+direction[1]))
-
-                    if (self.i+direction[0] == opposite_color_piece.i or self.j+direction[1] == opposite_color_piece.j) and man_dist == 1:
-                        if (self.i+direction[0], self.j+direction[1]) in self.moves:
-                            self.moves.remove((self.i+direction[0], self.j+direction[1]))
-                    elif (self.i+direction[0] != opposite_color_piece.i and self.j+direction[1] != opposite_color_piece.j) and (man_dist == 2 or man_dist == 1):
-                        if (self.i+direction[0], self.j+direction[1]) in self.moves:
-                            self.moves.remove((self.i+direction[0], self.j+direction[1]))
-
-        for opposite_color_piece in opposite_color_pieces:
-            for prot in opposite_color_piece.protected:
-                if prot in self.moves:
-                    self.moves.remove(prot)
-
+        self.handle_castling_move(cur_game_state)
+        
+        possible_moves = [(move_x + self.i, move_y + self.j) for (move_x, move_y) in self.directions]
+        
+        for pm in possible_moves:
+            if (0 <= pm[0] < 8) and (0 <= pm[1] < 8):
+                if (pm not in pos_to_avoid):
+                    undo_dict = self.change_move((self.i, self.j), pm, cur_game_state)
+                    for nam in non_available_moves:
+                        attacks_king = nam.attacks_square(pm, cur_game_state)
+                        if attacks_king :
+                            break
+                    else:
+                        self.moves.add(pm)
+                    self.undo_move(pm, (self.i, self.j), cur_game_state, undo_dict)
+                elif pm in pos_to_avoid:
+                    self.protected.add(pm)
+                    
 class queen(piece):
     def __init__(self, i, j, image, color, name):
         super().__init__(image, color, name, i, j)
         self.protected = set()
         self.rect = None
+        self.directions = ((1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1))
 
-    def find_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces):
+    def attacks_square(self, square, cur_game_state):
+        possible_moves = [[(j*i[0], j*i[1]) for j in range(1, 8)] for i in self.directions]
+        moves_to_check = [[(self.i + move_x, self.j + move_y) for (move_x, move_y) in direction] for direction in possible_moves]
+        enemy_pieces = cur_game_state.position_of_black_pieces if (self.color == "white") else cur_game_state.position_of_white_pieces
+        friend_pieces = cur_game_state.position_of_black_pieces if (self.color == "black") else cur_game_state.position_of_white_pieces
+        moves_to_keep = []
+        for direction in moves_to_check:
+            for i, move in enumerate(direction):
+                if (move in enemy_pieces):
+                    moves_to_keep.append(direction[:i+1])
+                    break
+                if move in friend_pieces:
+                    moves_to_keep.append(direction[:i])
+                    break
+            else:
+                moves_to_keep.append(direction)
+        valid_moves = self.get_valid_moves(moves_to_keep, cur_game_state)
+        #print(self.name, self.color, self.i, self.j, valid_moves, square)
+        return square in valid_moves
+
+    def find_moves(self, cur_game_state):
         self.moves.clear()
         self.protected.clear()
-        pos_to_avoid = position_of_black_pieces if self.color == 'black' else position_of_white_pieces
-        pos_to_stop = position_of_black_pieces if self.color == 'white' else position_of_white_pieces
-        op_king_pos = black_king_pos if self.color == 'white' else white_king_pos
+        pos_to_avoid = cur_game_state.position_of_black_pieces if (self.color == 'black') else cur_game_state.position_of_white_pieces
+        pos_to_stop = cur_game_state.position_of_black_pieces if (self.color == 'white') else cur_game_state.position_of_white_pieces
+        op_king_pos = cur_game_state.black_king_pos if (self.color == 'white') else cur_game_state.white_king_pos
 
-        for i in range(1, 8):
-            if self.i + i <= 7 and (self.i+i, self.j) not in pos_to_avoid:
-                self.moves.add((self.i+i, self.j))
-                if (self.i+i, self.j) in pos_to_stop:
-                    break
-            elif self.i + i <= 7 and (self.i+i, self.j) in pos_to_avoid:
-                self.protected.add((self.i+i, self.j))
-                break
-        for i in range(1, 8):
-            if self.i - i >= 0 and (self.i-i, self.j) not in pos_to_avoid:
-                self.moves.add((self.i-i, self.j))
-                if (self.i-i, self.j) in pos_to_stop:
-                    break
-            elif self.i - i >= 0 and (self.i-i, self.j) in pos_to_avoid:
-                self.protected.add((self.i-i, self.j))
-                break
-        for i in range(1, 8):
-            if self.i + i <= 7:
-                
-                if self.j + i <= 7 and (self.i+i, self.j+i) not in pos_to_avoid:
-                    self.moves.add((self.i+i, self.j+i))
-                    if (self.i+i, self.j+i) in pos_to_stop:
-                        break
-                elif self.j + i <= 7 and (self.i+i, self.j+i) in pos_to_avoid:
-                    self.protected.add((self.i+i, self.j+i))
-                    break
-                    
-        for i in range(1, 8):
-            if self.i + i <= 7:
-                if self.j - i >= 0 and (self.i+i, self.j-i) not in pos_to_avoid:
-                    self.moves.add((self.i+i, self.j-i))
-                    if (self.i+i, self.j-i) in pos_to_stop:
-                        break
-                elif self.j - i >= 0 and (self.i+i, self.j-i) in pos_to_avoid:
-                    self.protected.add((self.i+i, self.j-i))
-                    break
-                    
-        for i in range(1, 8):
-            if self.i - i >= 0:
-                #pos_to_avoid.add((self.i-i, self.j))
-                if self.j + i <= 7 and (self.i-i, self.j+i) not in pos_to_avoid:
-                    self.moves.add((self.i-i, self.j+i))
-                    if (self.i-i, self.j+i) in pos_to_stop:
-                        break
-                elif self.j + i <= 7 and (self.i-i, self.j+i) in pos_to_avoid:
-                    self.protected.add((self.i-i, self.j+i))
-                    break
-                    
-        for i in range(1, 8):
-            if self.i - i >= 0:
-                if self.j - i >= 0 and (self.i-i, self.j-i) not in pos_to_avoid:
-                    self.moves.add((self.i-i, self.j-i))
-                    if (self.i-i, self.j-i) in pos_to_stop:
-                        break
-                elif self.j - i >= 0 and (self.i-i, self.j-i) in pos_to_avoid:
-                    self.protected.add((self.i-i, self.j-i))
-                    break
-                    
-        for j in range(1, 8):
-            if self.j + j <= 7 and (self.i, self.j+j) not in pos_to_avoid:
-                self.moves.add((self.i, self.j+j))
-                if (self.i, self.j+j) in pos_to_stop:
-                    break
-            elif self.j + j <= 7 and (self.i, self.j+j) in pos_to_avoid:
-                self.protected.add((self.i, self.j+j))
-                break
-                
-        for j in range(1, 8):
-            if self.j - j >= 0 and (self.i, self.j-j) not in pos_to_avoid:
-                self.moves.add((self.i, self.j-j))
-                if (self.i, self.j-j) in pos_to_stop:
-                    break
-            elif self.j - j >= 0 and (self.i, self.j-j) in pos_to_avoid:
-                self.protected.add((self.i, self.j-j))
-                break
-                
-        if op_king_pos in self.moves:
-            self.is_king_in_moves = True
-        else:
-            self.is_king_in_moves = False
+        possible_moves = [[(j*i[0], j*i[1]) for j in range(1, 8)] for i in self.directions]
+        moves_to_check = [[(self.i + move_x, self.j + move_y) for (move_x, move_y) in direction] for direction in possible_moves]
+        
+        self.add_moves(moves_to_check, pos_to_avoid, pos_to_stop)
+        
+        self.check_is_king_in_moves(op_king_pos)
         #remove_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces)
 
 class rook(piece):
@@ -591,54 +431,41 @@ class rook(piece):
         super().__init__(image, color, name, i, j)
         self.protected = set()
         self.rect = None
+        self.directions = ((1, 0), (0, 1), (-1, 0), (0, -1))
         
-    def find_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces):
+    def attacks_square(self, square, cur_game_state):
+        possible_moves = [[(j*i[0], j*i[1]) for j in range(1, 8)] for i in self.directions]
+        moves_to_check = [[(self.i + move_x, self.j + move_y) for (move_x, move_y) in direction] for direction in possible_moves]
+        enemy_pieces = cur_game_state.position_of_black_pieces if (self.color == "white") else cur_game_state.position_of_white_pieces
+        friend_pieces = cur_game_state.position_of_black_pieces if (self.color == "black") else cur_game_state.position_of_white_pieces
+        moves_to_keep = []
+        for direction in moves_to_check:
+            for i, move in enumerate(direction):
+                if (move in enemy_pieces):
+                    moves_to_keep.append(direction[:i+1])
+                    break
+                if move in friend_pieces:
+                    moves_to_keep.append(direction[:i])
+                    break
+            else:
+                moves_to_keep.append(direction)
+        valid_moves = self.get_valid_moves(moves_to_keep, cur_game_state)
+        
+        return square in valid_moves
+        
+    def find_moves(self, cur_game_state):
         self.moves.clear()
         self.protected.clear()
-        pos_to_avoid = position_of_black_pieces if self.color == 'black' else position_of_white_pieces
-        pos_to_stop = position_of_black_pieces if self.color == 'white' else position_of_white_pieces
-        op_king_pos = white_king_pos if self.color == 'black' else black_king_pos
+        pos_to_avoid = cur_game_state.position_of_black_pieces if (self.color == 'black') else cur_game_state.position_of_white_pieces
+        pos_to_stop = cur_game_state.position_of_black_pieces if (self.color == 'white') else cur_game_state.position_of_white_pieces
+        op_king_pos = cur_game_state.white_king_pos if (self.color == 'black') else cur_game_state.black_king_pos
 
-        for i in range(1, 8):
-            if self.i - i >= 0 and (self.i-i, self.j) not in pos_to_avoid:
-                self.moves.add((self.i-i, self.j))
-                if (self.i-i, self.j) in pos_to_stop:
-                    break
-            elif self.i - i >= 0 and (self.i-i, self.j) in pos_to_avoid:
-                self.protected.add((self.i-i, self.j))
-                break
-        for i in range(1, 8):
+        possible_moves = [[(j*i[0], j*i[1]) for j in range(1, 8)] for i in self.directions]
+        moves_to_check = [[(self.i + move_x, self.j + move_y) for (move_x, move_y) in direction] for direction in possible_moves]
         
-            if self.i + i <= 7 and (self.i+i, self.j) not in pos_to_avoid:
-                self.moves.add((self.i+i, self.j))
-                if (self.i+i, self.j) in pos_to_stop:
-                    break
-            elif self.i + i <= 7 and (self.i+i, self.j) in pos_to_avoid:
-                self.protected.add((self.i+i, self.j))
-                break
-                
-        for i in range(1, 8):
-            if self.j + i <= 7 and (self.i, self.j+i) not in pos_to_avoid:
-                self.moves.add((self.i, self.j+i))
-                if (self.i, self.j+i) in pos_to_stop:
-                    break
-            elif self.j + i <= 7 and (self.i, self.j+i) in pos_to_avoid:
-                self.protected.add((self.i, self.j+i))
-                break
-                
-        for i in range(1, 8):
-            if self.j - i >= 0 and (self.i, self.j-i) not in pos_to_avoid:
-                self.moves.add((self.i, self.j-i))
-                if (self.i, self.j-i) in pos_to_stop:
-                    break
-            elif self.j - i >= 0 and (self.i, self.j-i) in pos_to_avoid:
-                self.protected.add((self.i, self.j-i))
-                break
-            
-        if op_king_pos in self.moves:
-            self.is_king_in_moves = True
-        else:
-            self.is_king_in_moves = False
+        self.add_moves(moves_to_check, pos_to_avoid, pos_to_stop)
+        
+        self.check_is_king_in_moves(op_king_pos)
         #remove_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces)
 
 class bishop(piece):
@@ -646,58 +473,41 @@ class bishop(piece):
         super().__init__(image, color, name, i, j)
         self.protected = set()
         self.rect = None
+        self.directions = ((1, 1), (-1, 1), (-1, -1), (1, -1))
         
-    def find_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces):
+    def attacks_square(self, square, cur_game_state):
+        possible_moves = [[(j*i[0], j*i[1]) for j in range(1, 8)] for i in self.directions]
+        moves_to_check = [[(self.i + move_x, self.j + move_y) for (move_x, move_y) in direction] for direction in possible_moves]
+        enemy_pieces = cur_game_state.position_of_black_pieces if (self.color == "white") else cur_game_state.position_of_white_pieces
+        friend_pieces = cur_game_state.position_of_black_pieces if (self.color == "black") else cur_game_state.position_of_white_pieces
+        moves_to_keep = []
+        for direction in moves_to_check:
+            for i, move in enumerate(direction):
+                if (move in enemy_pieces):
+                    moves_to_keep.append(direction[:i+1])
+                    break
+                if move in friend_pieces:
+                    moves_to_keep.append(direction[:i])
+                    break
+            else:
+                moves_to_keep.append(direction)
+        valid_moves = self.get_valid_moves(moves_to_keep, cur_game_state)
+        
+        return square in valid_moves
+        
+    def find_moves(self, cur_game_state):
         self.moves.clear()
         self.protected.clear()
-        pos_to_avoid = position_of_black_pieces if self.color == 'black' else position_of_white_pieces
-        pos_to_stop = position_of_black_pieces if self.color == 'white' else position_of_white_pieces
-        op_king_pos = white_king_pos if self.color == 'black' else black_king_pos
+        pos_to_avoid = cur_game_state.position_of_black_pieces if (self.color == 'black') else cur_game_state.position_of_white_pieces
+        pos_to_stop = cur_game_state.position_of_black_pieces if (self.color == 'white') else cur_game_state.position_of_white_pieces
+        op_king_pos = cur_game_state.white_king_pos if (self.color == 'black') else cur_game_state.black_king_pos
 
-        for i in range(1, 8):
-            if self.i + i <= 7:
-                if self.j + i <= 7 and (self.i+i, self.j+i) not in pos_to_avoid:
-                    self.moves.add((self.i+i, self.j+i))
-                    if (self.i+i, self.j+i) in pos_to_stop:
-                        break
-                elif self.j + i <= 7 and (self.i+i, self.j+i) in pos_to_avoid:
-                    self.protected.add((self.i+i, self.j+i))
-                    break
-            
-        for i in range(1, 8):
-            if self.i + i <= 7:
-                if self.j - i >= 0 and (self.i+i, self.j-i) not in pos_to_avoid:
-                    self.moves.add((self.i+i, self.j-i))
-                    if (self.i+i, self.j-i) in pos_to_stop:
-                        break
-                elif self.j - i >= 0 and (self.i+i, self.j-i) in pos_to_avoid:
-                    self.protected.add((self.i+i, self.j-i))
-                    break
+        possible_moves = [[(j*i[0], j*i[1]) for j in range(1, 8)] for i in self.directions]
+        moves_to_check = [[(self.i + move_x, self.j + move_y) for (move_x, move_y) in direction] for direction in possible_moves]
         
-        for i in range(1, 8):
-            if self.i - i >= 0:
-                if self.j + i <= 7 and (self.i-i, self.j+i) not in pos_to_avoid:
-                    self.moves.add((self.i-i, self.j+i))
-                    if (self.i-i, self.j+i) in pos_to_stop:
-                        break
-                elif self.j + i <= 7 and (self.i-i, self.j+i) in pos_to_avoid:
-                    self.protected.add((self.i-i, self.j+i))
-                    break
-                    
-        for i in range(1, 8):
-            if self.i - i >= 0:
-                if self.j - i >= 0 and (self.i-i, self.j-i) not in pos_to_avoid:
-                    self.moves.add((self.i-i, self.j-i))
-                    if (self.i-i, self.j-i) in pos_to_stop:
-                        break
-                elif self.j - i >= 0 and (self.i-i, self.j-i) in pos_to_avoid:
-                    self.protected.add((self.i-i, self.j-i))
-                    break
-                    
-        if op_king_pos in self.moves:
-            self.is_king_in_moves = True
-        else:
-            self.is_king_in_moves = False
+        self.add_moves(moves_to_check, pos_to_avoid, pos_to_stop)
+                   
+        self.check_is_king_in_moves(op_king_pos)
         #remove_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces)
 
 class knight(piece):
@@ -705,95 +515,31 @@ class knight(piece):
         super().__init__(image, color, name, i, j)
         self.protected = set()
         self.rect = None
+        self.directions = [(2, -1), (2, 1), (1, 2), (-1, 2), (-2, 1), (-2, -1), (-1, -2), (1, -2)]
         
-    def find_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces):
+    def attacks_square(self, square, cur_game_state):
+        moves_to_check = [(self.i + move_x, self.j + move_y) for (move_x, move_y) in self.directions]
+        valid_moves = self.get_valid_moves([moves_to_check], cur_game_state)
+        return square in valid_moves
+        
+    def find_moves(self, cur_game_state):
         self.moves.clear()
         self.protected.clear()
-        pos_to_avoid = position_of_black_pieces if self.color == 'black' else position_of_white_pieces
-        op_king_pos = white_king_pos if self.color == 'black' else black_king_pos
+        pos_to_avoid = cur_game_state.position_of_black_pieces if (self.color == 'black') else cur_game_state.position_of_white_pieces
+        pos_to_stop = cur_game_state.position_of_black_pieces if (self.color == "white") else cur_game_state.position_of_black_pieces
+        op_king_pos = cur_game_state.white_king_pos if (self.color == 'black') else cur_game_state.black_king_pos
 
-        if self.i - 1 >= 0:
-            if self.j + 2 <= 7 and (self.i-1, self.j+2) not in pos_to_avoid:
-                self.moves.add((self.i-1, self.j+2))
-                
-            elif self.j + 2 <= 7 and (self.i-1, self.j+2) in pos_to_avoid:
-                self.protected.add((self.i-1, self.j+2))
-            if self.j -2 >= 0 and (self.i-1, self.j-2) not in pos_to_avoid:
-                self.moves.add((self.i-1, self.j-2))
-                
-            elif self.j -2 >= 0 and (self.i-1, self.j-2) in pos_to_avoid:
-                self.protected.add((self.i-1, self.j-2))
-        if self.i + 1 <= 7:
-            if self.j + 2 <= 7 and (self.i+1, self.j+2) not in pos_to_avoid:
-                self.moves.add((self.i+1, self.j+2))
-                
-            elif self.j + 2 <= 7 and (self.i+1, self.j+2) in pos_to_avoid:
-                self.protected.add((self.i+1, self.j+2))
-            if self.j - 2 >= 0 and (self.i+1, self.j-2) not in pos_to_avoid:
-                self.moves.add((self.i+1, self.j-2))
-                
-            elif self.j - 2 >= 0 and (self.i+1, self.j-2) in pos_to_avoid:
-                self.protected.add((self.i+1, self.j-2))
-        if self.i - 2 >= 0:
-            if self.j - 1 >= 0 and (self.i-2, self.j-1) not in pos_to_avoid:
-                self.moves.add((self.i-2, self.j-1))
-                
-            elif self.j - 1 >= 0 and (self.i-2, self.j-1) in pos_to_avoid:
-                self.protected.add((self.i-2, self.j-1))
-            if self.j + 1 <= 7 and (self.i-2, self.j+1) not in pos_to_avoid:
-                self.moves.add((self.i-2, self.j+1))
-                
-            elif self.j + 1 <= 7 and (self.i-2, self.j+1) in pos_to_avoid:
-                self.protected.add((self.i-2, self.j+1))
-        if self.i + 2 <= 7:
-            if self.j + 1 <= 7 and (self.i+2, self.j+1) not in pos_to_avoid:
-                self.moves.add((self.i+2, self.j+1))
-                
-            elif self.j + 1 <= 7 and (self.i+2, self.j+1) in pos_to_avoid:
-                self.protected.add((self.i+2, self.j+1))
-            if self.j - 1 >= 0 and (self.i+2, self.j-1) not in pos_to_avoid:
-                self.moves.add((self.i+2, self.j-1))
-                
-            elif self.j - 1 >= 0 and (self.i+2, self.j-1) in pos_to_avoid:
-                self.protected.add((self.i+2, self.j-1))
-                
-        if op_king_pos in self.moves:
-            self.is_king_in_moves = True
-        else:
-            self.is_king_in_moves = False
+        possible_moves = [[(j*i[0], j*i[1]) for j in range(1, 2)] for i in self.directions]
+        moves_to_check = [[(self.i + move_x, self.j + move_y) for (move_x, move_y) in direction] for direction in possible_moves]
+        
+        self.add_moves(moves_to_check, pos_to_avoid, pos_to_stop)
+        
+        self.check_is_king_in_moves(op_king_pos)
         #remove_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces)
         
-black_king_pos = (4, 0)
-white_king_pos = (4, 7)
-
-position_of_black_pieces = set()
-position_of_white_pieces = set()
-board_pieces = {}
-
-black_piece_images = [r'C:\Users\avery\Pictures\bK.png', r'C:\Users\avery\Pictures\bQ.png', r'C:\Users\avery\Pictures\bR.png', r'C:\Users\avery\Pictures\bB.png',
-                r'C:\Users\avery\Pictures\bN.png', r'C:\Users\avery\Pictures\bp.png']
-white_piece_images = [r'C:\Users\avery\Pictures\wK.png', r'C:\Users\avery\Pictures\wQ.png', r'C:\Users\avery\Pictures\wR.png', r'C:\Users\avery\Pictures\wB.png',
-                r'C:\Users\avery\Pictures\wN.png', r'C:\Users\avery\Pictures\wp.png']
-
-pieces = ['king', 'queen', 'rook', 'bishop', 'knight', 'pawn']
-
-to_place = {'r' + pieces[2]: (black_piece_images[2], white_piece_images[2], rook), 
-            'r' + pieces[4]: (black_piece_images[4], white_piece_images[4], knight), 
-            'r' + pieces[3]: (black_piece_images[3], white_piece_images[3], bishop), 
-            pieces[1]: (black_piece_images[1], white_piece_images[1], queen), 
-            pieces[0]: (black_piece_images[0], white_piece_images[0], king), 
-            'l' + pieces[3]: (black_piece_images[3], white_piece_images[3], bishop), 
-            'l' + pieces[4]: (black_piece_images[4], white_piece_images[4], knight), 
-            'l' + pieces[2]: (black_piece_images[2], white_piece_images[2], rook)}
-
-white_captured_piece = {'pawn' : [pygame.image.load(white_piece_images[-1]).convert_alpha(), 0], 
-                        'knight' : [pygame.image.load(white_piece_images[4]).convert_alpha(), 0], 
-                        'bishop' : [pygame.image.load(white_piece_images[3]).convert_alpha(), 0], 
-                        'rook' : [pygame.image.load(white_piece_images[2]).convert_alpha(), 0], 
-                        'queen' : [pygame.image.load(white_piece_images[1]).convert_alpha(), 0]}
-
-black_captured_piece = {'pawn' : [pygame.image.load(black_piece_images[-1]).convert_alpha(), 0], 
-                        'knight' : [pygame.image.load(black_piece_images[4]).convert_alpha(), 0], 
-                        'bishop' : [pygame.image.load(black_piece_images[3]).convert_alpha(), 0], 
-                        'rook' : [pygame.image.load(black_piece_images[2]).convert_alpha(), 0], 
-                        'queen' : [pygame.image.load(black_piece_images[1]).convert_alpha(), 0]}
+def set_captured_to_zero(white_captured_piece, black_captured_piece):
+    for key in white_captured_piece:
+        white_captured_piece[key][1] = 0
+    for key in black_captured_piece:
+        black_captured_piece[key][1] = 0
+        
