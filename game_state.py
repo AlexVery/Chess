@@ -80,10 +80,22 @@ class GameState():
         self.draw_possible = False
         self.draw_button_active = False
         self.draw_button = None
+        
+        self.en_passant_moves = []
+        self.position_counts = {}
     
     def initialise_game(self):
         
         self.count = 0
+        
+        self.no_pawns_moved = True
+        self.no_captured_piece = True
+        
+        self.draw_possible = False
+        self.draw_button_active = False
+        
+        self.en_passant_moves = []
+        self.position_counts = {}
         
         create_and_place_pieces(self)
         set_captured_to_zero(self.white_captured_piece, self.black_captured_piece)
@@ -177,14 +189,44 @@ class GameState():
                     if (en_passant_pawn.en_passant_turn_count == 0):
                         en_passant_pawn.en_passant_turn_count = self.count
 
+                # needed to calculate the hash value for the three and fivefold repetitions
+                self.en_passant_moves = pawn_en_passant_moves
+
                 is_king_checked(self.board_pieces[self.black_king_pos], self)
                 is_king_checked(self.board_pieces[self.white_king_pos], self)
+                
+                self.update_threefold()
+                
                 break
             
         else:
                         
             events_list.clear()
             
+    def get_castling_rights_kings(self):
+        
+        white_king = self.board_pieces[self.white_king_pos]
+        black_king = self.board_pieces[self.black_king_pos]
+        
+        return (white_king.left_castling_available, 
+                white_king.right_castling_available,
+                black_king.left_castling_available,
+                black_king.right_castling_available)
+            
+    def get_position_key(self):
+        
+        board_state = tuple(sorted(self.board_pieces.items()))
+        side_to_move = self.count % 2
+        castling_rights = self.get_castling_rights_kings()
+        en_passant_squares = tuple(self.en_passant_moves)
+        
+        return (
+            board_state,
+            side_to_move,
+            castling_rights,
+            en_passant_squares,
+        )
+        
     def check_insufficient_material(self, cur_game_state):
         black_pieces_remaining = active_pieces(cur_game_state.board_pieces, cur_game_state.position_of_black_pieces)
         white_pieces_remaining = active_pieces(cur_game_state.board_pieces, cur_game_state.position_of_white_pieces)
@@ -252,12 +294,35 @@ class GameState():
             return True
         
         return False
-            
+    
+    def get_repetition_num(self):
+        
+        key = self.get_position_key()
+        return self.position_counts.get(key, 0)
+    
+    def update_threefold(self):
+        
+        key = self.get_position_key()
+        self.position_counts[key] = self.position_counts.get(key, 0) + 1
+        
+    def check_threefold(self):
+        
+        if any([3 <= val < 5 for val in self.position_counts.values()]):
+            self.draw_button_active = True
+            if self.draw_button.pressed:
+                return True
+        
+        if any([val == 5 for val in self.position_counts.values()]):
+            return True
+        
+        return False
+        
     def check_draw(self, num, num2, cur_game_state):
         
         return (self.check_stalemate(num, num2) or 
                 self.check_insufficient_material(cur_game_state) or
-                self.fifty_seventyfive_move_rule(cur_game_state))
+                self.fifty_seventyfive_move_rule(cur_game_state) or
+                self.check_threefold())
             
     # method to check whether the game must be terminated (ckeckmate or draw reached)
     def evaluate_game_state(self, cur_game_state):
