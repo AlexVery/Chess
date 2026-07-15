@@ -84,7 +84,7 @@ def draw_images_of_captured(offset_captured, cur_game_state):  # cur_game_state 
         cur_game_state.screen.blit(im, (910, start_y + offset_captured[1] * j))
         j += 1
 
-def draw_captured(count, exit_condition, cur_game_state):
+def draw_turn_result_text(count, exit_condition, font, offset_captured, cur_game_state):
     
     username = (cur_game_state.username1 if ((count%2) == 0) else cur_game_state.username2)
     # the player who wins is the one who made the last move resulting in the checkmate,
@@ -103,15 +103,81 @@ def draw_captured(count, exit_condition, cur_game_state):
     text_to_render, color_to_render = ((text_to_render, color_to_render) if (not result_text) else 
                                        (result_text, pygame.Color("white" if (exit_condition == 1) else "black" if (exit_condition == -1) else "midnightblue")))
     
-    font_turn = pygame.sysfont.SysFont("Arial", 13, True)
-    font_turn_txt = font_turn.render(text_to_render, True, color_to_render)
+    font_turn_txt = font.render(text_to_render, True, color_to_render)
     
-    txt1_w, txt1_h = font_turn.size(cur_game_state.username1 + "'s turn")
-    txt2_w, txt2_h = font_turn.size(cur_game_state.username2 + "'s turn")
-    text_exit_w, text_exit_h = font_turn.size(result_text)
+    txt1_w, txt1_h = font.size(cur_game_state.username1 + "'s turn")
+    txt2_w, txt2_h = font.size(cur_game_state.username2 + "'s turn")
+    text_exit_w, text_exit_h = font.size(result_text)
     
     txt_w, txt_h = (txt1_w, txt1_h) if (count % 2 == 0) else (txt2_w, txt2_h)
     txt_w, txt_h = (txt_w, txt_h) if (not result_text) else (text_exit_w, text_exit_h)
+    
+    side_rect_center = cur_game_state.res[0]-cur_game_state.block_sz[0]
+    turn_rect_y = cur_game_state.pieces_sz_captured[1] + offset_captured[1] * 5 + txt_h
+    
+    cur_game_state.screen.blit(font_turn_txt, (side_rect_center-txt_w//2, turn_rect_y))
+    
+    return txt_w, txt_h, side_rect_center, turn_rect_y
+
+def draw_fifty_seventy_five_rule(side_rect_center, turn_rect_y, txt_h, font, cur_game_state):
+    
+    # we first need to calculate the difference between the half moves performed and the threshold for the
+    # fifty move rule, same for seventy five rule move
+    dif_fifty = cur_game_state.fifty_moves_rule-cur_game_state.count
+    dif_seventyfive = cur_game_state.seventyfive_moves_rule-cur_game_state.count
+    
+    fifty_move_rule_txt = (f"50-move rule in {dif_fifty} moves") if (dif_fifty > 0) else ("50-move rule available")
+    seventyfive_move_rule_txt = (f"75-move rule in {dif_seventyfive} moves") if (dif_seventyfive > 0) else "75-move rule activated" 
+    move_texts = ["Half-moves: " + str(cur_game_state.count), fifty_move_rule_txt, seventyfive_move_rule_txt]
+    
+    if (not cur_game_state.no_pawns_moved) or (not cur_game_state.no_captured_piece):
+        move_texts = move_texts[:1]
+    
+    move_texts_y_off = txt_h * 1.5
+    move_texts_rends = [font.render(text, True, pygame.Color("white")) for text in move_texts]
+    move_texts_rects = [rend.get_rect() for rend in move_texts_rends]
+    for i, rect in enumerate(move_texts_rects):
+        rect.topleft = (side_rect_center-rect.width//2, turn_rect_y + move_texts_y_off * (i+1.5))
+    
+    for rend, rect in zip(move_texts_rends, move_texts_rects):
+        cur_game_state.screen.blit(rend, rect)
+        
+    return move_texts_rects[-1].bottom
+        
+def draw_repetition_count(side_rect_center, last_text_rect_y, txt_h, font, cur_game_state):
+    
+    rep_txts = []
+    repetition_count = cur_game_state.get_repetition_num()
+    
+    if repetition_count < 3:
+        rep_txts.append(f"Position repeated: {repetition_count}/3")
+    elif 3 <= repetition_count < 5:
+        rep_txts.extend([f"Position repeated: {repetition_count}/5", "Threefold repetition reached", "You may claim a draw"])
+    else:
+        rep_txts.extend(["Fivefold repetition reached", "Draw is automatic"])
+        
+    txt_rends = [font.render(txt, True, pygame.Color("white")) for txt in rep_txts]
+    txt_rects = [rend.get_rect() for rend in txt_rends]
+    
+    y_start = last_text_rect_y + txt_h
+    for i, rect in enumerate(txt_rects):
+        rect.topleft = (side_rect_center - rect.width // 2, y_start + txt_h * 1.5 * i)
+        
+    for rend, rect in zip(txt_rends, txt_rects):
+        cur_game_state.screen.blit(rend, rect)
+
+def draw_text_side(count, exit_condition, offset_captured, cur_game_state):
+    
+    font = pygame.sysfont.SysFont("Arial", 13, True)
+    txt_w, txt_h, side_rect_center, turn_rect_y = draw_turn_result_text(count, exit_condition, font, offset_captured, cur_game_state)
+    bottom_y = draw_fifty_seventy_five_rule(side_rect_center, turn_rect_y, txt_h, font, cur_game_state)
+    draw_repetition_count(side_rect_center, bottom_y, txt_h, font, cur_game_state)
+    
+# responsible for drawinf the captured pieces, along the numbers for each captured piece, ex.
+# white pawn image : number of white pawns captured. It then calls draw_text_side to display
+# some additional important messages for the players' turn and the 50-, 75-move rule
+def draw_captured(count, exit_condition, cur_game_state):
+    
     # the value of the offset is the size of the captured pieces (40x40) +
     # + a 0.25 offset so the space between them appears smooth
     offset_captured = (1.25 * cur_game_state.pieces_sz_captured[0], 1.25 * cur_game_state.pieces_sz_captured[1])
@@ -125,31 +191,7 @@ def draw_captured(count, exit_condition, cur_game_state):
         text = cur_game_state.font.render(f'{cur_game_state.black_captured_piece[c[1]][1]}', True, pygame.Color('white'))
         cur_game_state.screen.blit(text, (960, cur_game_state.pieces_sz_captured[1] + offset_captured[1] * c[0]))
         
-    # we first need to calculate the difference between the half moves performed and the threshold for the
-    # fifty move rule, same for seventy five rule move
-    dif_fifty = cur_game_state.fifty_moves_rule-cur_game_state.count
-    dif_seventyfive = cur_game_state.seventyfive_moves_rule-cur_game_state.count
-    
-    fifty_move_rule_txt = (f"50-move rule in {dif_fifty} moves") if (dif_fifty > 0) else ("50-move rule available")
-    seventyfive_move_rule_txt = (f"75-move rule in {dif_seventyfive} moves") if (dif_seventyfive > 0) else "75-move rule activated" 
-    move_texts = ["Half-moves: " + str(cur_game_state.count), fifty_move_rule_txt, seventyfive_move_rule_txt]
-    
-    if (not cur_game_state.no_pawns_moved) or (not cur_game_state.no_captured_piece):
-        move_texts = move_texts[:1]
-    
-    side_rect_center = cur_game_state.res[0]-cur_game_state.block_sz[0]
-    turn_rect_y = cur_game_state.pieces_sz_captured[1] + offset_captured[1] * 5 + txt_h
-    
-    move_texts_y_off = txt_h * 1.5
-    move_texts_rends = [font_turn.render(text, True, pygame.Color("white")) for text in move_texts]
-    move_texts_rects = [rend.get_rect() for rend in move_texts_rends]
-    for i, rect in enumerate(move_texts_rects):
-        rect.topleft = (side_rect_center-rect.width//2, turn_rect_y + move_texts_y_off * (i+2))
-        
-    cur_game_state.screen.blit(font_turn_txt, (side_rect_center-txt_w//2, turn_rect_y))
-    
-    for rend, rect in zip(move_texts_rends, move_texts_rects):
-        cur_game_state.screen.blit(rend, rect)
+    draw_text_side(count, exit_condition, offset_captured, cur_game_state)
 
 def change_captured(pos, cur_game_state):
     color = cur_game_state.board_pieces[pos].color
@@ -515,6 +557,8 @@ def play(cur_game_state, game_data):
     draw_list = []
     
     block_sz = cur_game_state.block_sz
+    
+    cur_game_state.update_threefold()
     
     while exit_condition is None:
         
