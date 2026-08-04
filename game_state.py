@@ -35,6 +35,7 @@ class GameState():
         self.position_of_white_pieces = set()
         self.board_pieces = {}
 
+        # change the paths to the ones you're using to store your pieces images
         self.black_piece_images = [r'C:\Users\avery\Pictures\bK.png', r'C:\Users\avery\Pictures\bQ.png', r'C:\Users\avery\Pictures\bR.png', r'C:\Users\avery\Pictures\bB.png',
                         r'C:\Users\avery\Pictures\bN.png', r'C:\Users\avery\Pictures\bp.png']
         self.white_piece_images = [r'C:\Users\avery\Pictures\wK.png', r'C:\Users\avery\Pictures\wQ.png', r'C:\Users\avery\Pictures\wR.png', r'C:\Users\avery\Pictures\wB.png',
