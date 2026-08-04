@@ -20,8 +20,9 @@ class AppState():
             # the two usernames must be different, if a user using the username "Jim23" is logged in, no other log in
             # of the same username must be permitted
             different_usernames = username1 != username2
-            self.display_text_usrnms.update(not different_usernames)
-            self.play_button.update(event_list)
+            # if the usernames are the same and they are both different than the empty string, display the error message
+            self.display_text_usrnms.update((not different_usernames) and all([len(item) > 0 for item in (username1, username2)]))
+            self.play_button.update(event_list, blocked=not all(self.valid_codes))
             active_user_buttons = [self.sign_up_p1_button if (self.valid_usernames[0] and (username1 not in game_data)) else self.log_in_p1_button, 
                                     self.sign_up_p2_button if (self.valid_usernames[1] and (username2 not in game_data)) else self.log_in_p2_button]
             for i, (valid_code, button, usrnm, valid_usrnm) in enumerate(zip(self.valid_codes, active_user_buttons, [username1, username2], self.valid_usernames)):
@@ -44,6 +45,15 @@ class AppState():
         self.play_button.pressed = False
         self.play_button.return_vals = None
         
+        self.box1_active, self.box2_active = False, False
+        self.valid_usernames = [False, False]
+        self.valid_codes = [False, False]
+        
+        username1 = ""
+        username2 = ""
+        
+        return username1, username2      
+        
     def run_app(self, game_data, cur_game_state):
         
         username1, username2 = cur_game_state.username1, cur_game_state.username2
@@ -62,30 +72,30 @@ class AppState():
             
             username1, username2 = self.handle_login_signup(cur_game_state, game_data, event_list, username1, username2)
                 
-            if not self.play_button.pressed: self.play_button.draw(cur_game_state.screen)
+            if (not self.play_button.pressed) and (all(self.valid_codes)): self.play_button.draw(cur_game_state.screen)
             
             # the Button class has an attribute return_vals (can be seen in button.py) that stores the
             # values returned by the function it calls. For example self.play_button is the 'Play' button, and when
             # pressed calls the play function, which return -1, 0 or 1.
             white_won = self.play_button.return_vals # -1 = black won, 1 = white won, 0 draw: return value of play function
             if white_won == "R":
-                self.reset_state_main_menu(cur_game_state)
+                username1, username2 = self.reset_state_main_menu(cur_game_state)
                 continue
             
             cur_game_state.store_h2h_data(game_data, username1, username2, white_won)
             
             if not cur_game_state.first_time:
-                return_val = try_again(cur_game_state)
+                return_val = try_again(cur_game_state, game_data, (username1, username2))
                 if return_val == -1:
                     cur_game_state.save_game_data(game_data)
                     pygame.quit()
                     sys.exit()  
                 elif return_val == 0:
-                    self.reset_state_main_menu(cur_game_state)
+                    username1, username2 = self.reset_state_main_menu(cur_game_state)
                 elif return_val == 1:
                     white_won = play(cur_game_state, game_data)
                     if white_won == "R":
-                        self.reset_state_main_menu(cur_game_state)
+                        username1, username2 = self.reset_state_main_menu(cur_game_state)
                         continue
                     cur_game_state.store_h2h_data(game_data, username1, username2, white_won)
                 
