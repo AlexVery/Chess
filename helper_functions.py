@@ -600,7 +600,7 @@ def play(cur_game_state, game_data):
     
 # side_x_width : the width of the side rect used to display the captured
 # pieces and the current player who must make a move 
-def try_again(cur_game_state):
+def try_again(cur_game_state, game_data, users):
     screen = cur_game_state.screen
     end_img = cur_game_state.screen
     res = cur_game_state.res
@@ -616,6 +616,19 @@ def try_again(cur_game_state):
     
     main_menu = Button((res[0]-side_x_width//2) - button_size[0]//2, res[1]-button_size[1]*2, *button_size, "Main Menu", lambda : None)
     play_again = Button(main_menu.rect.left, main_menu.rect.top-button_size[1]*2, *button_size, "Play Again", lambda : None)
+    
+    
+    font = pygame.sysfont.SysFont("Arial", 13, True)
+    side_rect_center = cur_game_state.res[0]-cur_game_state.block_sz[0]
+    
+    w_perc_txt = "W% {} {}%"
+    y_start = play_again.rect.top - 2 * (play_again.rect.height)
+    
+    w_perc_txts = [w_perc_txt.format(user, round(game_data[user]["W %"], 1)) for user in users]
+    w_perc_rends = [font.render(txt, True, pygame.Color(color)) for color, txt in zip(("white", "black"), w_perc_txts)]
+    w_perc_rects = [rend.get_rect(topleft=(side_rect_center-rend.get_width()//2, 
+                                          y_start + i * play_again.rect.height)) 
+                    for i, rend in enumerate(w_perc_rends)]
     
     while True:
         
@@ -634,6 +647,10 @@ def try_again(cur_game_state):
             return 1
         
         screen.blit(end_screen, (0,0))
+        
+        for rend, rect in zip(w_perc_rends, w_perc_rects):
+            screen.blit(rend, rect)
+        
         main_menu.update(events)
         play_again.update(events)
         
