@@ -35,7 +35,6 @@ def main_loop():
     buttons = create_buttons(chess_game_state, game_data)
     app_state = AppState(chess_game_state, buttons)
     
-    print(game_data)
     app_state.run_app(game_data, chess_game_state)
 
 main_loop()
