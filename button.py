@@ -24,7 +24,8 @@ class Button():
         self.rect = pygame.Rect(self.x, self.y, self.width, self.height)
         self.butsurf = self.font.render(text, True, (20, 20, 20))
 
-    def update(self, events, callback=None):
+    def update(self, events, callback=None, blocked=False):
+        if blocked: return
         
         if callback is not None:
             callback()
