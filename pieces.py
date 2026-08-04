@@ -424,7 +424,6 @@ class queen(piece):
         self.add_moves(moves_to_check, pos_to_avoid, pos_to_stop)
         
         self.check_is_king_in_moves(op_king_pos)
-        #remove_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces)
 
 class rook(piece):
     def __init__(self, i, j, image, color, name):
@@ -466,7 +465,6 @@ class rook(piece):
         self.add_moves(moves_to_check, pos_to_avoid, pos_to_stop)
         
         self.check_is_king_in_moves(op_king_pos)
-        #remove_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces)
 
 class bishop(piece):
     def __init__(self, i, j, image, color, name):
@@ -508,7 +506,6 @@ class bishop(piece):
         self.add_moves(moves_to_check, pos_to_avoid, pos_to_stop)
                    
         self.check_is_king_in_moves(op_king_pos)
-        #remove_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces)
 
 class knight(piece):
     def __init__(self, i, j, image, color, name):
@@ -535,7 +532,6 @@ class knight(piece):
         self.add_moves(moves_to_check, pos_to_avoid, pos_to_stop)
         
         self.check_is_king_in_moves(op_king_pos)
-        #remove_moves(self, black_king_pos, white_king_pos, position_of_black_pieces, position_of_white_pieces, board_pieces)
         
 def set_captured_to_zero(white_captured_piece, black_captured_piece):
     for key in white_captured_piece:
